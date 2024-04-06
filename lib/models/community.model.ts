@@ -18,7 +18,7 @@ const communitySchema = new mongoose.Schema({
   bio: String,
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "CV",
+    ref: "User",
   },
   cv: [
     {

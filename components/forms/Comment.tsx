@@ -18,7 +18,7 @@ import { Input } from "../ui/input";
 import { Button } from "../ui/button";
 
 import { CommentValidation } from "@/lib/validations/cv";
-import { addCommentToThread } from "@/lib/actions/cv.actions";
+import { addCommentToCV } from "@/lib/actions/cv.actions";
 
 interface Props {
   cvId: string;
@@ -37,12 +37,7 @@ function Comment({ cvId, currentUserImg, currentUserId }: Props) {
   });
 
   const onSubmit = async (values: z.infer<typeof CommentValidation>) => {
-    await addCommentToThread(
-      cvId,
-      values.cv,
-      JSON.parse(currentUserId),
-      pathname
-    );
+    await addCommentToCV(cvId, values.cv, JSON.parse(currentUserId), pathname);
 
     form.reset();
   };

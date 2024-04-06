@@ -282,7 +282,6 @@ export async function deleteCommunity(communityId: string) {
       throw new Error("Community not found");
     }
 
-    // Delete all CVs associated with the community
     await CV.deleteMany({ community: communityId });
 
     // Find all users who are part of the community

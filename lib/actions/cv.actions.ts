@@ -1,35 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import CV from "../models/cv.model";
-import User from "../models/user.model";
+
 import { connectToDB } from "../mongoose";
 
-interface Params {
-  text: string;
-  author: string;
-  communityId: string | null;
-  path: string;
-}
-
-export async function createCV({ text, author, communityId, path }: Params) {
-  try {
-    connectToDB();
-    const createdCV = await CV.create({
-      text,
-      author,
-      community: null,
-    });
-
-    await User.findByIdAndUpdate(author, {
-      $push: { cv: createdCV._id },
-    });
-
-    revalidatePath(path);
-  } catch (error: any) {
-    throw new Error(`Error creating a post: ${error.message}`);
-  }
-}
+import User from "../models/user.model";
+import CV from "../models/cv.model";
+import Community from "../models/community.model";
 
 export async function fetchPosts(pageNumber = 1, pageSize = 20) {
   connectToDB();
@@ -44,10 +21,10 @@ export async function fetchPosts(pageNumber = 1, pageSize = 20) {
       path: "author",
       model: User,
     })
-    // .populate({
-    //   path: "community",
-    //   model: Community,
-    // })
+    .populate({
+      path: "community",
+      model: Community,
+    })
     .populate({
       path: "children",
       populate: {
@@ -59,13 +36,109 @@ export async function fetchPosts(pageNumber = 1, pageSize = 20) {
 
   const totalPostsCount = await CV.countDocuments({
     parentId: { $in: [null, undefined] },
-  }); // Get the total count of posts
+  });
 
   const posts = await postsQuery.exec();
 
   const isNext = totalPostsCount > skipAmount + posts.length;
 
   return { posts, isNext };
+}
+
+interface Params {
+  text: string;
+  author: string;
+  communityId: string | null;
+  path: string;
+}
+
+export async function createCV({ text, author, communityId, path }: Params) {
+  try {
+    connectToDB();
+
+    const communityIdObject = await Community.findOne(
+      { id: communityId },
+      { _id: 1 }
+    );
+
+    const createdCV = await CV.create({
+      text,
+      author,
+      community: communityIdObject,
+    });
+
+    await User.findByIdAndUpdate(author, {
+      $push: { cv: createdCV._id },
+    });
+
+    if (communityIdObject) {
+      await Community.findByIdAndUpdate(communityIdObject, {
+        $push: { cv: createdCV._id },
+      });
+    }
+
+    revalidatePath(path);
+  } catch (error: any) {
+    throw new Error(`Failed to create cv: ${error.message}`);
+  }
+}
+
+async function fetchAllChildCVs(cvId: string): Promise<any[]> {
+  const childCVs = await CV.find({ parentId: cvId });
+
+  const descendantCVs = [];
+  for (const childCV of childCVs) {
+    const descendants = await fetchAllChildCVs(childCV._id);
+    descendantCVs.push(childCV, ...descendants);
+  }
+
+  return descendantCVs;
+}
+
+export async function deleteCV(id: string, path: string): Promise<void> {
+  try {
+    connectToDB();
+
+    const mainCV = await CV.findById(id).populate("author community");
+
+    if (!mainCV) {
+      throw new Error("CV not found");
+    }
+
+    const descendantCVs = await fetchAllChildCVs(id);
+
+    const descendantcvIds = [id, ...descendantCVs.map((cv) => cv._id)];
+
+    const uniqueAuthorIds = new Set(
+      [
+        ...descendantCVs.map((cv) => cv.author?._id?.toString()),
+        mainCV.author?._id?.toString(),
+      ].filter((id) => id !== undefined)
+    );
+
+    const uniqueCommunityIds = new Set(
+      [
+        ...descendantCVs.map((cv) => cv.community?._id?.toString()),
+        mainCV.community?._id?.toString(),
+      ].filter((id) => id !== undefined)
+    );
+
+    await CV.deleteMany({ _id: { $in: descendantcvIds } });
+
+    await User.updateMany(
+      { _id: { $in: Array.from(uniqueAuthorIds) } },
+      { $pull: { cv: { $in: descendantcvIds } } }
+    );
+
+    await Community.updateMany(
+      { _id: { $in: Array.from(uniqueCommunityIds) } },
+      { $pull: { cv: { $in: descendantcvIds } } }
+    );
+
+    revalidatePath(path);
+  } catch (error: any) {
+    throw new Error(`Failed to delete cv: ${error.message}`);
+  }
 }
 
 export async function fetchCVById(cvId: string) {
@@ -78,26 +151,26 @@ export async function fetchCVById(cvId: string) {
         model: User,
         select: "_id id name image",
       })
-      // .populate({
-      //   path: "community",
-      //   model: Community,
-      //   select: "_id id name image",
-      // })
+      .populate({
+        path: "community",
+        model: Community,
+        select: "_id id name image",
+      })
       .populate({
         path: "children",
         populate: [
           {
-            path: "author", // Populate the author field within children
+            path: "author",
             model: User,
-            select: "_id id name parentId image", // Select only _id and username fields of the author
+            select: "_id id name parentId image",
           },
           {
-            path: "children", // Populate the children field within children
-            model: CV, // The model of the nested children (assuming it's the same "Thread" model)
+            path: "children",
+            model: CV,
             populate: {
-              path: "author", // Populate the author field within nested children
+              path: "author",
               model: User,
-              select: "_id id name parentId image", // Select only _id and username fields of the author
+              select: "_id id name parentId image",
             },
           },
         ],
@@ -111,7 +184,7 @@ export async function fetchCVById(cvId: string) {
   }
 }
 
-export async function addCommentToThread(
+export async function addCommentToCV(
   cvId: string,
   commentText: string,
   userId: string,
@@ -140,6 +213,7 @@ export async function addCommentToThread(
 
     revalidatePath(path);
   } catch (err) {
+    console.error("Error while adding comment:", err);
     throw new Error("Unable to add comment");
   }
 }
